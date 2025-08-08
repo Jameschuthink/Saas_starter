@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "tidewave": {
+      "type": "stdio",
+      "command": "./mcp-proxy",
+      "args": ["http://localhost:4000/tidewave/mcp"],
+      "env": {}
+    },
+    "context7": {
+      "type": "http",
+      "url": "https://mcp.context7.com/mcp"
+    }
+  }
+}
