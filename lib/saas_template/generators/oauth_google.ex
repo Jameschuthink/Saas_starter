@@ -176,7 +176,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
 
         conn
         |> put_flash(:error, "Authentication failed. Please try again.")
-        |> redirect(to: ~p"/users/log_in")
+        |> redirect(to: "/users/log_in")
       end
 
       def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -261,7 +261,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
 
     def oauth_button(assigns) do
       ~H\"\"\"
-      <.link href={~p"/auth/\#{@provider}"} class={["btn btn-outline w-full gap-2", @class]} {@rest}>
+      <.link href={"/auth/\#{@provider}"} class={["btn btn-outline w-full gap-2", @class]} {@rest}>
         \<%= render_slot(@inner_block) %>
       </.link>
       \"\"\"
