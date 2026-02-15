@@ -50,15 +50,28 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
         # Dependencies already exist
         source
       else
-        # Add blog dependencies after timex
+        # Add blog dependencies before the end of deps list
+        # More robust: finds the last dependency and adds after it
         updated_content =
           String.replace(
             content,
-            ~r/(\{:timex, "~> 3\.7\.13"\})/,
-            "\\1,\n      # Blog system\n      {:backpex, \"~> 0.13.0\"},\n      {:earmark, \"~> 1.4\"},\n      {:slugify, \"~> 1.3\"}"
+            ~r/(defp deps do\s*\[.*?)(\s*\]\s*end)/s,
+            fn full, deps_content, closing ->
+              full
+              |> String.replace(
+                closing,
+                ",\n      # Blog system\n      {:backpex, \"~> 0.13.0\"},\n      {:earmark, \"~> 1.4\"},\n      {:slugify, \"~> 1.3\"}" <>
+                  closing
+              )
+            end
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not add blog dependencies to mix.exs. Please add manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -75,19 +88,40 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
     Igniter.update_file(igniter, "config/config.exs", fn source ->
       content = Rewrite.Source.get(source, :content)
 
-      if String.contains?(content, "config :backpex, backpex") do
+      if String.contains?(content, "config :backpex") do
         # Config already exists
         source
       else
-        # Add config before the import_config line
+        # Add config before the import_config line - try multiple patterns
         updated_content =
-          String.replace(
-            content,
-            ~r/(# Import environment specific config\. This must remain at the bottom)/,
-            "\n#{config_content}\n\\1"
-          )
+          cond do
+            String.contains?(content, "# Import environment specific config") ->
+              String.replace(
+                content,
+                ~r/(# Import environment specific config[^\n]*)/,
+                "\n#{config_content}\n\\1"
+              )
 
-        Rewrite.Source.update(source, :content, updated_content)
+            String.contains?(content, "import_config") ->
+              String.replace(
+                content,
+                ~r/(import_config)/,
+                "\n#{config_content}\n\\1"
+              )
+
+            true ->
+              IO.warn(
+                "Could not find insertion point in config.exs. Please add Backpex config manually."
+              )
+
+              content
+          end
+
+        if updated_content == content do
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -100,15 +134,26 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
         # Config already updated
         source
       else
-        # Add backpex to import_deps
+        # Add backpex to import_deps - more flexible pattern
         updated_content =
           String.replace(
             content,
-            ~r/(import_deps: \[:ecto, :ecto_sql, :phoenix)/,
-            "\\1, :backpex"
+            ~r/(import_deps: \[[^\]]*)/,
+            fn match ->
+              if String.ends_with?(match, "[") do
+                match <> ":backpex"
+              else
+                match <> ", :backpex"
+              end
+            end
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not update .formatter.exs. Please add :backpex to import_deps manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -121,19 +166,34 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
         # Hooks already added
         source
       else
-        # Add Backpex hooks import and usage
+        # Add Backpex hooks import - more flexible with whitespace
         updated_content =
           content
           |> String.replace(
-            ~r/(import \{ createLiveToastHook \} from "live_toast";)/,
+            ~r/(import\s*\{[^}]*createLiveToastHook[^}]*\}\s*from\s*["']live_toast["'];?)/,
             "\\1\nimport { Hooks as BackpexHooks } from \"backpex\";"
           )
           |> String.replace(
-            ~r/(const Hooks = \{\s*LiveToast: createLiveToastHook\(\),)/,
-            "\\1\n  ...BackpexHooks,"
+            ~r/(const\s+Hooks\s*=\s*\{[^}]*LiveToast:\s*createLiveToastHook\(\)[^}]*)/,
+            fn match ->
+              if String.contains?(match, "...") do
+                match
+              else
+                String.replace(
+                  match,
+                  ~r/(LiveToast:\s*createLiveToastHook\(\),?)/,
+                  "\\1\n  ...BackpexHooks,"
+                )
+              end
+            end
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not update assets/js/app.js. Please add Backpex hooks manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -623,7 +683,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
     Igniter.update_file(igniter, "lib/saas_template_web/components/layouts.ex", fn source ->
       content = Rewrite.Source.get(source, :content)
 
-      if String.contains?(content, "alias Backpex") do
+      if String.contains?(content, "def blog(assigns)") do
         # Already updated
         source
       else
@@ -635,11 +695,16 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
             "\\1\n  alias Backpex"
           )
           |> String.replace(
-            ~r/(def theme_toggle\(assigns\) do[\s\S]*?end)/,
-            "\\1#{blog_layout_function}"
+            ~r/(end\s*)$/,
+            "#{blog_layout_function}\n\\1"
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not update layouts.ex. Please add blog layout function manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -656,6 +721,8 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
           source
         else
           # Add SEO meta tags after the live_title
+          app_name = "Application.get_env(:saas_template, :app_name)"
+
           meta_tags = """
 
           <!-- SEO Meta Tags -->
@@ -664,16 +731,16 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
           <meta :if={assigns[:meta_author]} name="author" content={@meta_author} />
 
           <!-- Open Graph Meta Tags -->
-          <meta property="og:title" content={assigns[:page_title] || "SaasTemplate"} />
+          <meta property="og:title" content={assigns[:page_title] || #{app_name}} />
           <meta :if={assigns[:meta_description]} property="og:description" content={@meta_description} />
           <meta :if={assigns[:meta_url]} property="og:url" content={@meta_url} />
           <meta property="og:type" content={assigns[:meta_type] || "website"} />
           <meta :if={assigns[:meta_image]} property="og:image" content={@meta_image} />
-          <meta property="og:site_name" content={Application.get_env(:saas_template, :app_name)} />
+          <meta property="og:site_name" content={#{app_name}} />
 
           <!-- Twitter Card Meta Tags -->
           <meta name="twitter:card" content="summary_large_image" />
-          <meta name="twitter:title" content={assigns[:page_title] || "SaasTemplate"} />
+          <meta name="twitter:title" content={assigns[:page_title] || #{app_name}} />
           <meta :if={assigns[:meta_description]} name="twitter:description" content={@meta_description} />
           <meta :if={assigns[:meta_image]} name="twitter:image" content={@meta_image} />
 
@@ -690,11 +757,16 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
           updated_content =
             String.replace(
               content,
-              ~r/(<\.live_title default="SaasTemplate" suffix=" · Phoenix Framework">[\s\S]*?<\/\.live_title>)/,
+              ~r/(<\.live_title[^>]*>[\s\S]*?<\/\.live_title>)/,
               "\\1#{meta_tags}"
             )
 
-          Rewrite.Source.update(source, :content, updated_content)
+          if updated_content == content do
+            IO.warn("Could not update root.html.heex. Please add SEO meta tags manually.")
+            source
+          else
+            Rewrite.Source.update(source, :content, updated_content)
+          end
         end
       end
     )
@@ -720,11 +792,16 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
             "\\1\n    get \"/blog\", BlogController, :index\n    get \"/blog/:slug\", BlogController, :show"
           )
           |> String.replace(
-            ~r/(scope "\/admin" do\s*pipe_through \[:browser, :admin_protected\])/,
+            ~r/(scope "\/admin"[^\n]*\n\s*pipe_through \[:browser, :admin_protected\])/,
             "\\1\n\n    backpex_routes()\n\n    live_session :default, on_mount: Backpex.InitAssigns do\n      live_resources \"/posts\", SaasTemplateWeb.Live.Admin.PostLive\n    end"
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not update router.ex. Please add blog routes manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
@@ -839,9 +916,13 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
 
         """
 
-        # Add blog URLs to the index function and add the blog function
+        # Add Blog alias and blog URLs to the index function
         updated_content =
           content
+          |> String.replace(
+            ~r/(use SaasTemplateWeb, :controller)/,
+            "\\1\n  alias SaasTemplate.Blog"
+          )
           |> String.replace(
             ~r/(urls = \[\]\s*\|\> add_static_urls\(conn\))/,
             "\\1\n    |> add_blog_urls(conn)"
@@ -851,7 +932,12 @@ defmodule Mix.Tasks.SaasTemplate.Gen.Blog do
             blog_function <> "\\1"
           )
 
-        Rewrite.Source.update(source, :content, updated_content)
+        if updated_content == content do
+          IO.warn("Could not update sitemap_controller.ex. Please add blog URLs manually.")
+          source
+        else
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
     end)
   end
