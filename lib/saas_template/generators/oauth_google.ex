@@ -199,7 +199,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
 
                 conn
                 |> put_flash(:error, "Failed to create user.")
-                |> redirect(to: ~p"/")
+                |> redirect(to: "/")
             end
 
           user ->
