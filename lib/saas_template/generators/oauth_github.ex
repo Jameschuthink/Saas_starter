@@ -30,7 +30,6 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
       |> update_accounts_context()
       |> create_github_auth_controller()
       |> update_router()
-      |> update_login_page()
       |> create_oauth_migration()
       |> update_env_example()
 
@@ -168,18 +167,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
         # Add oauth_registration_changeset function after email_changeset
         oauth_changeset_function = """
 
-        @doc \"\"\"
-        A user changeset for OAuth registration.
-
-        It validates the email and oauth_provider fields and sets is_oauth_user to true.
-        \"\"\"
-        def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do
-        user
-        |> cast(attrs, [:email, :oauth_provider])
-        |> validate_required([:email, :oauth_provider])
-        |> validate_email(opts)
-        |> put_change(:is_oauth_user, true)
-        end
+  @doc \"\"\"\n  A user changeset for OAuth registration.\n\n  It validates the email and oauth_provider fields, sets is_oauth_user to true,\n  and automatically confirms the email (OAuth emails are pre-verified).\n  \"\"\"\n  def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do\n    user\n    |> cast(attrs, [:email, :oauth_provider])\n    |> validate_required([:email, :oauth_provider])\n    |> validate_email(opts)\n    |> put_change(:is_oauth_user, true)\n    |> put_change(:confirmed_at, DateTime.utc_now())\n  end
         """
 
         updated_content =
@@ -218,15 +206,21 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
   defp create_github_auth_controller(igniter) do
     controller_content = """
     defmodule SaasTemplateWeb.GitHubAuthController do
-      alias SaasTemplateWeb.UserAuth
-      alias SaasTemplate.Accounts
       use SaasTemplateWeb, :controller
+
+      alias SaasTemplate.Accounts
+      alias SaasTemplateWeb.UserAuth
+
       require Logger
 
       plug Ueberauth
 
-      def request(conn, _params) do
-        Phoenix.Controller.redirect(conn, to: Ueberauth.Strategy.Helpers.callback_url(conn))
+      def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
+        Logger.warning("OAuth authentication failed: \#{inspect(failure.errors)}")
+
+        conn
+        |> put_flash(:error, "Authentication failed. Please try again.")
+        |> redirect(to: ~p"/users/log_in")
       end
 
       def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -293,40 +287,6 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
               content,
               ~r/(delete "\/users\/log-out", UserSessionController, :delete)/,
               "\\1\n\n    scope \"/auth\" do\n      get \"/github\", GitHubAuthController, :request\n      get \"/github/callback\", GitHubAuthController, :callback\n    end"
-            )
-
-          Rewrite.Source.update(source, :content, updated_content)
-        end
-      end
-    end)
-  end
-
-  defp update_login_page(igniter) do
-    Igniter.update_file(igniter, "lib/saas_template_web/live/user_live/login.ex", fn source ->
-      content = Rewrite.Source.get(source, :content)
-
-      if String.contains?(content, "Login with GitHub") do
-        # GitHub login button already exists
-        source
-      else
-        # Add GitHub login button
-        if String.contains?(content, "Login with Google") do
-          # Google button exists, add GitHub button after it
-          updated_content =
-            String.replace(
-              content,
-              ~r/(<\.button href=\{~p"\/auth\/google"\}>Login with Google<\/\.button>)/,
-              "\\1\n          <.button href={~p\"/auth/github\"}>Login with GitHub</.button>"
-            )
-
-          Rewrite.Source.update(source, :content, updated_content)
-        else
-          # No OAuth buttons exist, add GitHub button after password form
-          updated_content =
-            String.replace(
-              content,
-              ~r/(<\.\/form>\s+<\.\/div>)/,
-              "\\1\n\n          <.button href={~p\"/auth/github\"}>Login with GitHub</.button>"
             )
 
           Rewrite.Source.update(source, :content, updated_content)
@@ -432,7 +392,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
 
     ## GitHub OAuth Integration Complete! 🔐
 
-    GitHub OAuth authentication has been successfully integrated into your SaaS template. Here's what was configured:
+    GitHub OAuth authentication has been successfully integrated into your SaaS template.
 
     ### Dependencies Added:
     - ueberauth_github (~> 0.8) for GitHub OAuth strategy
@@ -444,39 +404,64 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
 
     ### Code Updates:
     - User schema updated with OAuth fields (if not already present)
+    - OAuth users automatically confirmed (emails pre-verified by GitHub)
     - Accounts context extended with register_oauth_user/1 function (if not already present)
-    - GitHubAuthController created for handling OAuth flow
+    - GitHubAuthController created with OAuth success/failure handling
     - Router updated with GitHub OAuth routes
-    - Login page updated with GitHub login button
 
     ### Files Created:
     - lib/saas_template_web/controllers/github_auth_controller.ex
     - Database migration for OAuth user fields (if not already present)
 
     ### Files Updated:
-    - .env.example with GitHub OAuth environment variables (prepended to top)
+    - .env.example with GitHub OAuth environment variables
+
+    ### ✅ Manual Integration (30 seconds):
+
+    Add the GitHub login button to your login page:
+
+    1. Open: lib/saas_template_web/live/user_live/login.ex
+
+    2. Add after the password form or other OAuth buttons:
+
+        <.oauth_button provider="github">
+          Continue with GitHub
+        </.oauth_button>
+
+    3. (Optional) Add the same to your registration page:
+       lib/saas_template_web/live/user_live/registration.ex
+
+    Note: The oauth_button component supports multiple providers. You can add
+    Google, GitHub, or other OAuth providers using the same component.
 
     ### Next Steps:
+
     1. Set up GitHub OAuth application:
        - Visit https://github.com/settings/applications/new
        - Create a new OAuth App
        - Set Authorization callback URL: http://localhost:4000/auth/github/callback
 
-    2. Configure environment variables:
-       - GITHUB_CLIENT_ID: Your GitHub OAuth client ID
-       - GITHUB_CLIENT_SECRET: Your GitHub OAuth client secret
+    2. Configure environment variables in .env:
+       - GITHUB_CLIENT_ID=your_actual_github_client_id
+       - GITHUB_CLIENT_SECRET=your_actual_github_client_secret
 
-    3. Run the migration (if not already run):
-       - mix ecto.migrate
+    3. Run the database migration (if not already run):
+       mix ecto.migrate
 
-    4. Update your production callback URL when deploying
+    4. Test the OAuth flow:
+       mix phx.server
+       # Navigate to /users/log_in and test GitHub login
+
+    5. Update production callback URL when deploying:
+       https://yourdomain.com/auth/github/callback
 
     ### OAuth Flow:
-    - Users can now click "Login with GitHub" on the login page
-    - New users will be automatically registered with OAuth
-    - Existing users with matching email will be logged in
+    - Users click "Continue with GitHub" button
+    - New users automatically registered with confirmed email
+    - Existing users with matching email are logged in
+    - OAuth failures handled gracefully with error messages
 
-    🎉 Your app now supports GitHub OAuth authentication!
+    🎉 Your app now supports stable, maintainable GitHub OAuth authentication!
     """
 
     Igniter.add_notice(igniter, completion_message)

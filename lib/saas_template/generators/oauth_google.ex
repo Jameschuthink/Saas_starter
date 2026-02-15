@@ -29,7 +29,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
       |> update_accounts_context()
       |> create_google_auth_controller()
       |> update_router()
-      |> update_login_page()
+      |> add_oauth_button_component()
       |> create_oauth_migration()
       |> update_env_example()
 
@@ -121,11 +121,16 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
         source
       else
         # Add oauth_registration_changeset function after email_changeset
+        changeset_function = """
+
+  @doc \"\"\"\n  A user changeset for OAuth registration.\n\n  It validates the email and oauth_provider fields, sets is_oauth_user to true,\n  and automatically confirms the email (OAuth emails are pre-verified).\n  \"\"\"\n  def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do\n    user\n    |> cast(attrs, [:email, :oauth_provider])\n    |> validate_required([:email, :oauth_provider])\n    |> validate_email(opts)\n    |> put_change(:is_oauth_user, true)\n    |> put_change(:confirmed_at, DateTime.utc_now())\n  end
+        """
+        
         updated_content =
           String.replace(
             content,
             ~r/(def email_changeset\(user, attrs, opts \\\\ \[\]\) do[\s\S]*?end)/,
-            "\\1\n\n  @doc \"\"\"\n  A user changeset for OAuth registration.\n\n  It validates the email and oauth_provider fields and sets is_oauth_user to true.\n  \"\"\"\n  def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do\n    user\n    |> cast(attrs, [:email, :oauth_provider])\n    |> validate_required([:email, :oauth_provider])\n    |> validate_email(opts)\n    |> put_change(:is_oauth_user, true)\n  end"
+            "\\1#{changeset_function}"
           )
 
         Rewrite.Source.update(source, :content, updated_content)
@@ -157,15 +162,21 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
   defp create_google_auth_controller(igniter) do
     controller_content = """
     defmodule SaasTemplateWeb.GoogleAuthController do
-      alias SaasTemplateWeb.UserAuth
-      alias SaasTemplate.Accounts
       use SaasTemplateWeb, :controller
+
+      alias SaasTemplate.Accounts
+      alias SaasTemplateWeb.UserAuth
+
       require Logger
 
       plug Ueberauth
 
-      def request(conn, _params) do
-        Phoenix.Controller.redirect(conn, to: Ueberauth.Strategy.Helpers.callback_url(conn))
+      def callback(%{assigns: %{ueberauth_failure: failure}} = conn, _params) do
+        Logger.warning("OAuth authentication failed: \#{inspect(failure.errors)}")
+
+        conn
+        |> put_flash(:error, "Authentication failed. Please try again.")
+        |> redirect(to: ~p"/users/log_in")
       end
 
       def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -227,25 +238,59 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
     end)
   end
 
-  defp update_login_page(igniter) do
-    Igniter.update_file(igniter, "lib/saas_template_web/live/user_live/login.ex", fn source ->
-      content = Rewrite.Source.get(source, :content)
+  defp add_oauth_button_component(igniter) do
+    component_content = ~s"""
+    @doc \"\"\"
+    Renders an OAuth provider login button.
 
-      if String.contains?(content, "Login with Google") do
-        # Google login button already exists
-        source
-      else
-        # Add Google login button after the password form
-        updated_content =
-          String.replace(
-            content,
-            ~r/(<\.\/form>\s+<\.\/div>)/,
-            "\\1\n\n          <.button href={~p\"/auth/google\"}>Login with Google</.button>"
-          )
+    ## Examples
 
-        Rewrite.Source.update(source, :content, updated_content)
+        <.oauth_button provider="google">
+          Continue with Google
+        </.oauth_button>
+
+        <.oauth_button provider="google" class="btn-lg">
+          <.icon name="hero-lock-closed" /> Sign in with Google
+        </.oauth_button>
+    \"\"\"
+    attr :provider, :string, required: true
+    attr :class, :string, default: nil
+    attr :rest, :global, include: ~w(disabled)
+
+    slot :inner_block, required: true
+
+    def oauth_button(assigns) do
+      ~H\"\"\"
+      <.link href={~p"/auth/\#{@provider}"} class={["btn btn-outline w-full gap-2", @class]} {@rest}>
+        \<%= render_slot(@inner_block) %>
+      </.link>
+      \"\"\"
+    end
+
+    """
+
+    Igniter.update_file(
+      igniter,
+      "lib/saas_template_web/components/core_components.ex",
+      fn source ->
+        content = Rewrite.Source.get(source, :content)
+
+        if String.contains?(content, "def oauth_button") do
+          # OAuth button component already exists
+          source
+        else
+          # Add oauth_button component before the icon/1 component
+          updated_content =
+            String.replace(
+              content,
+              ~r/(  @doc \"""\n  Renders a \[Heroicon\])/,
+              "#{component_content}\\1"
+            )
+
+          Rewrite.Source.update(source, :content, updated_content)
+        end
       end
-    end)
+    )
   end
 
   defp create_oauth_migration(igniter) do
@@ -313,7 +358,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
 
     ## Google OAuth Integration Complete! 🔐
 
-    Google OAuth authentication has been successfully integrated into your SaaS template. Here's what was configured:
+    Google OAuth authentication has been successfully integrated into your SaaS template.
 
     ### Dependencies Added:
     - ueberauth_google (~> 0.10) for Google OAuth strategy
@@ -325,10 +370,11 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
 
     ### Code Updates:
     - User schema updated with OAuth fields (is_oauth_user, oauth_provider)
+    - OAuth users automatically confirmed (emails pre-verified by Google)
     - Accounts context extended with register_oauth_user/1 function
-    - GoogleAuthController created for handling OAuth flow
+    - GoogleAuthController created with OAuth success/failure handling
     - Router updated with OAuth routes (/auth/google, /auth/google/callback)
-    - Login page updated with Google login button
+    - OAuth button component added to core_components.ex
 
     ### Files Created:
     - lib/saas_template_web/controllers/google_auth_controller.ex
@@ -337,7 +383,25 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
     ### Files Updated:
     - .env.example with Google OAuth environment variables
 
+    ### ✅ Manual Integration (30 seconds):
+
+    Add the Google login button to your login page:
+
+    1. Open: lib/saas_template_web/live/user_live/login.ex
+
+    2. Add after the password form (around line 94):
+
+        <div class="divider text-sm">OR</div>
+
+        <.oauth_button provider="google">
+          Continue with Google
+        </.oauth_button>
+
+    3. (Optional) Add the same to your registration page:
+       lib/saas_template_web/live/user_live/registration.ex
+
     ### Next Steps:
+
     1. Set up Google OAuth credentials:
        - Visit https://console.developers.google.com/
        - Create a new project or select existing one
@@ -345,21 +409,27 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGoogle do
        - Create OAuth 2.0 credentials
        - Set authorized redirect URI: http://localhost:4000/auth/google/callback
 
-    2. Configure environment variables:
-       - GOOGLE_CLIENT_ID: Your Google OAuth client ID
-       - GOOGLE_CLIENT_SECRET: Your Google OAuth client secret
+    2. Configure environment variables in .env:
+       - GOOGLE_CLIENT_ID=your_actual_google_client_id
+       - GOOGLE_CLIENT_SECRET=your_actual_google_client_secret
 
-    3. Run the migration:
-       - mix ecto.migrate
+    3. Run the database migration:
+       mix ecto.migrate
 
-    4. Update your production redirect URI when deploying
+    4. Test the OAuth flow:
+       mix phx.server
+       # Navigate to /users/log_in and test Google login
+
+    5. Update production redirect URI when deploying:
+       https://yourdomain.com/auth/google/callback
 
     ### OAuth Flow:
-    - Users can now click "Login with Google" on the login page
-    - New users will be automatically registered with OAuth
-    - Existing users with matching email will be logged in
+    - Users click "Continue with Google" button
+    - New users automatically registered with confirmed email
+    - Existing users with matching email are logged in
+    - OAuth failures handled gracefully with error messages
 
-    🎉 Your app now supports Google OAuth authentication!
+    🎉 Your app now supports stable, maintainable Google OAuth authentication!
     """
 
     Igniter.add_notice(igniter, completion_message)
