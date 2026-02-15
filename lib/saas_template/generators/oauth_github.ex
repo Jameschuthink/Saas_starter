@@ -167,7 +167,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
         # Add oauth_registration_changeset function after email_changeset
         oauth_changeset_function = """
 
-  @doc \"\"\"\n  A user changeset for OAuth registration.\n\n  It validates the email and oauth_provider fields, sets is_oauth_user to true,\n  and automatically confirms the email (OAuth emails are pre-verified).\n  \"\"\"\n  def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do\n    user\n    |> cast(attrs, [:email, :oauth_provider])\n    |> validate_required([:email, :oauth_provider])\n    |> validate_email(opts)\n    |> put_change(:is_oauth_user, true)\n    |> put_change(:confirmed_at, DateTime.utc_now())\n  end
+  @doc \"\"\"\n  A user changeset for OAuth registration.\n\n  It validates the email and oauth_provider fields, sets is_oauth_user to true,\n  and automatically confirms the email (OAuth emails are pre-verified).\n  \"\"\"\n  def oauth_registration_changeset(user, attrs, opts \\\\\\\\ []) do\n    user\n    |> cast(attrs, [:email, :oauth_provider])\n    |> validate_required([:email, :oauth_provider])\n    |> validate_email(opts)\n    |> put_change(:is_oauth_user, true)\n    |> put_change(:confirmed_at, DateTime.utc_now()\n |> DateTime.truncate(:second))\n  end
         """
 
         updated_content =
@@ -220,7 +220,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
 
         conn
         |> put_flash(:error, "Authentication failed. Please try again.")
-        |> redirect(to: ~p"/users/log_in")
+        |> redirect(to: "/users/log_in")
       end
 
       def callback(%{assigns: %{ueberauth_auth: auth}} = conn, _params) do
@@ -243,7 +243,7 @@ defmodule Mix.Tasks.SaasTemplate.Gen.OauthGithub do
 
                 conn
                 |> put_flash(:error, "Failed to create user.")
-                |> redirect(to: ~p"/")
+                |> redirect(to: "/")
             end
 
           user ->
